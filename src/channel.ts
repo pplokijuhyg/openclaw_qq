@@ -618,7 +618,16 @@ async function buildReplyForwardContextBlock(opts: {
 }
 
 function normalizeTarget(raw: string): string {
-    return raw.replace(/^(qq:)/i, "");
+    const value = raw.replace(/^(qq:)/i, "").trim();
+    if (!value) return value;
+    if (/^guild:[^:]+:[^:]+$/i.test(value)) return value;
+    const groupMatch = value.match(/^group:(\d{5,12})$/i);
+    if (groupMatch) return `group:${groupMatch[1]}`;
+    const userMatch = value.match(/^(?:user|u|dm|direct):(\d{5,12})$/i);
+    if (userMatch) return `user:${userMatch[1]}`;
+    const plainId = value.match(/^(\d{5,12})$/);
+    if (plainId) return `user:${plainId[1]}`;
+    return value;
 }
 
 async function resetSessionByKey(storePath: string, sessionKey: string): Promise<boolean> {
@@ -1091,6 +1100,15 @@ function parseGroupIdFromTarget(to: string): number | null {
     return Number.isFinite(n) ? n : null;
 }
 
+function parseUserIdFromTarget(to: string): number | null {
+    const trimmed = String(to || "").trim();
+    const raw = trimmed.replace(/^(?:qq:)/i, "");
+    const match = raw.match(/^(?:user:)?(\d{5,12})$/i);
+    if (!match) return null;
+    const n = parseInt(match[1], 10);
+    return Number.isFinite(n) ? n : null;
+}
+
 function guessFileName(input: string): string {
     const local = toLocalPathIfAny(input);
     const name = path.basename(local || input.split("?")[0].split("#")[0]);
@@ -1378,7 +1396,11 @@ async function sendOneBotMessageWithAck(client: OneBotClient, to: string, messag
             }
             return { ok: false, error: `Invalid guild target: ${to}` };
         }
-        const data = await client.sendPrivateMsgAck(parseInt(to, 10), message);
+        const userId = parseUserIdFromTarget(to);
+        if (!userId) {
+            return { ok: false, error: `Invalid private target: ${to}` };
+        }
+        const data = await client.sendPrivateMsgAck(userId, message);
         return { ok: true, data };
     } catch (err) {
         return { ok: false, error: String(err) };
@@ -2911,8 +2933,16 @@ ${current}
     messaging: {
         normalizeTarget,
         targetResolver: {
-            looksLikeId: (id) => /^\d{5,12}$/.test(id) || /^group:\d{5,12}$/.test(id) || /^guild:/.test(id),
-            hint: "QQ号, 群号 (group:123), 或频道 (guild:id:channel)",
+            looksLikeId: (raw, normalized) => {
+                const value = String(normalized || raw || "").trim();
+                return /^user:\d{5,12}$/i.test(value) || /^group:\d{5,12}$/i.test(value) || /^guild:/i.test(value);
+            },
+            hint: "私聊用 user:QQ号，群聊用 group:群号，频道用 guild:id:channel（不要只写纯数字）",
         }
+    },
+    agentPrompt: {
+        messageToolHints: () => [
+            "QQ 发送目标必须带类型前缀：私聊 `user:<QQ号>`，群聊 `group:<群号>`，频道 `guild:<guildId>:<channelId>`；不要只写纯数字。",
+        ],
     }
 };
