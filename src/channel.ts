@@ -2336,6 +2336,34 @@ ${current}
 
                         if (payload.isError || isTextFailure) {
                             dispatcherError = new Error(payload.text || "API Error");
+                            const errText = (payload.text || "").toLowerCase();
+                            const isImageOrMediaError = /image|媒体|media|allowed directory|path|加载|失败/.test(errText);
+                            const userMsg = isImageOrMediaError ? "图片/媒体加载失败，请重试。" : "发送失败，请重试。";
+                            try {
+                                const send = async (msg: string): Promise<boolean> => {
+                                    if (currentRunState?.isStale()) return false;
+                                    let processed = msg;
+                                    if (config.formatMarkdown) processed = stripMarkdown(processed);
+                                    if (config.antiRiskMode) processed = processAntiRisk(processed);
+                                    processed = await resolveInlineCqRecord(processed);
+                                    if (currentRunState?.isStale()) return false;
+                                    const chunks = splitMessage(processed, config.maxMessageLength || 4000);
+                                    for (let i = 0; i < chunks.length; i++) {
+                                        if (currentRunState?.isStale()) return i > 0;
+                                        let chunk = chunks[i];
+                                        if (isGroup && i === 0) chunk = `[CQ:at,qq=${userId}] ${chunk}`;
+                                        if (isGroup) client.sendGroupMsg(groupId, chunk);
+                                        else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunk);
+                                        else client.sendPrivateMsg(userId, chunk);
+                                        if (chunks.length > 1 && config.rateLimitMs > 0) await sleep(config.rateLimitMs);
+                                    }
+                                    return chunks.length > 0;
+                                };
+                                await send(userMsg);
+                                deliveredAnything = true;
+                            } catch (e) {
+                                console.warn("[QQ] Failed to send error fallback message:", e);
+                            }
                             return;
                         }
                         const send = async (msg: string): Promise<boolean> => {
