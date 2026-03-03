@@ -41,9 +41,13 @@ const sessionQueues = new Map<string, SessionQueue>();
 
 async function drainSessionQueue(sessionKey: string, config: QQConfig, sendMessageFn: (msg: string) => void) {
     const q = sessionQueues.get(sessionKey);
-    if (!q || q.isProcessing || q.pendingPayloads.length === 0) return;
+    if (!q || q.isProcessing || q.pendingPayloads.length === 0) {
+        if (q?.isProcessing) console.log("[QQ][debug] drain skip: sessionKey=%s isProcessing=true pending=%s", sessionKey, q.pendingPayloads.length);
+        return;
+    }
 
     q.isProcessing = true;
+    console.log("[QQ][debug] drain start sessionKey=%s payloads=%s", sessionKey, q.pendingPayloads.length);
     const payloads = q.pendingPayloads;
     q.pendingPayloads = [];
     const runEpoch = payloads[payloads.length - 1]?.runEpoch ?? q.latestEpoch;
@@ -87,6 +91,7 @@ async function drainSessionQueue(sessionKey: string, config: QQConfig, sendMessa
     } finally {
         q.isProcessing = false;
         q.activeEpoch = 0;
+        console.log("[QQ][debug] drain end sessionKey=%s remaining=%s", sessionKey, q.pendingPayloads.length);
         if (q.pendingPayloads.length > 0 && !q.timer) {
             setTimeout(() => { void drainSessionQueue(sessionKey, config, sendMessageFn); }, 0);
         } else if (q.pendingPayloads.length === 0) {
@@ -2294,11 +2299,6 @@ ${current}
                         conversationLabel = `QQ Guild ${guildId} Channel ${channelId}`;
                     }
                     const fromId = buildEffectiveFromId(baseFromId, activeTempSlot);
-                    const replyToTarget = isGroup
-                        ? `group:${groupId}`
-                        : isGuild
-                            ? `guild:${guildId}:${channelId}`
-                            : `user:${userId}`;
                     const sessionLabel = buildQQSessionLabel({
                         isGroup,
                         isGuild,
@@ -2487,7 +2487,7 @@ ${current}
                     const shouldComputeCommandAuthorized = runtime.channel.commands.shouldComputeCommandAuthorized(text, cfg);
                     const commandAuthorized = shouldComputeCommandAuthorized ? isAdmin : true;
                     const ctxPayload = runtime.channel.reply.finalizeInboundContext({
-                        Provider: "qq", Channel: "qq", From: fromId, To: replyToTarget, Body: bodyWithReply, RawBody: text,
+                        Provider: "qq", Channel: "qq", From: fromId, To: "qq:bot", Body: bodyWithReply, RawBody: text,
                         SenderId: String(userId), SenderName: event.sender?.nickname || "Unknown", ConversationLabel: sessionLabel, ThreadLabel: sessionLabel,
                         SessionKey: route.sessionKey, AccountId: route.accountId, ChatType: isGroup ? "group" : isGuild ? "channel" : "direct", Timestamp: event.time * 1000,
                         Surface: "qq",
@@ -2495,6 +2495,7 @@ ${current}
                         ...(inboundMediaUrls.length > 0 && { MediaUrls: inboundMediaUrls }),
                         ...(replyMsgId && { ReplyToId: replyMsgId, ReplyToBody: replyToBody, ReplyToSender: replyToSender }),
                     });
+                    console.log("[QQ][debug] inbound ctx From=%s To=%s OriginatingTo=%s sessionKey=%s isGroup=%s groupId=%s userId=%s", fromId, ctxPayload.To, ctxPayload.OriginatingTo, route.sessionKey, isGroup, groupId ?? "-", userId);
 
                     await runtime.channel.session.recordInboundSession({
                         storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
@@ -2508,6 +2509,7 @@ ${current}
                         let processingDelayTimer: ReturnType<typeof setTimeout> | null = null;
                         let typingCardActivated = false;
                         const taskKey = buildTaskKey(account.accountId, isGroup, isGuild, groupId, guildId, channelId, userId);
+                        console.log("[QQ][debug] dispatch start sessionKey=%s taskKey=%s", route.sessionKey, taskKey);
 
                         const clearProcessingTimers = () => {
                             if (processingDelayTimer) {
@@ -2673,6 +2675,7 @@ ${current}
                             currentRunState = null;
                             clearProcessingTimers();
                             activeTaskIds.delete(taskKey);
+                            console.log("[QQ][debug] dispatch end sessionKey=%s taskKey=%s", route.sessionKey, taskKey);
                             if (typingCardActivated && isGroup) {
                                 clearGroupTypingCard(client, account.accountId, groupId);
                             }
@@ -2726,6 +2729,7 @@ ${current}
     },
     outbound: {
         sendText: async ({ to, text, accountId, replyTo }) => {
+            console.log("[QQ][debug] sendText to=%s accountId=%s", to, accountId || DEFAULT_ACCOUNT_ID);
             const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
             if (!client) return { channel: "qq", sent: false, error: "Client not connected" };
             const normalizedText = await resolveInlineCqRecord(text);
@@ -2736,6 +2740,7 @@ ${current}
                 if (replyTo && i === 0) message = [{ type: "reply", data: { id: String(replyTo) } }, { type: "text", data: { text: chunks[i] } }];
                 const ack = await sendOneBotMessageWithAck(client, to, message);
                 if (!ack.ok) {
+                    console.log("[QQ][debug] sendText failed to=%s error=%s", to, ack.error);
                     return { channel: "qq", sent: false, error: ack.error || "Failed to send text" };
                 }
                 lastAck = ack.data;
@@ -2745,6 +2750,7 @@ ${current}
             return { channel: "qq", sent: true, messageId: lastAck?.message_id ?? lastAck?.messageId ?? null };
         },
         sendMedia: async ({ to, text, mediaUrl, accountId, replyTo }) => {
+            console.log("[QQ][debug] sendMedia to=%s accountId=%s mediaUrl=%s", to, accountId || DEFAULT_ACCOUNT_ID, typeof mediaUrl === "string" ? mediaUrl.slice(0, 80) : mediaUrl);
             const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
             if (!client) return { channel: "qq", sent: false, error: "Client not connected" };
 
@@ -2785,6 +2791,7 @@ ${current}
                 textMessage.push({ type: "text", data: { text } });
                 const ack = await sendOneBotMessageWithAck(client, to, textMessage);
                 if (!ack.ok) {
+                    console.log("[QQ][debug] sendMedia text failed to=%s error=%s", to, ack.error);
                     return { channel: "qq", sent: false, error: `Text send failed: ${ack.error || "unknown"}` };
                 }
                 textAck = ack.data;
@@ -2845,6 +2852,7 @@ ${current}
             const mediaAck = await sendOneBotMessageWithAck(client, to, mediaMessage);
             if (!mediaAck.ok) {
                 const primaryError = mediaAck.error || "unknown";
+                console.log("[QQ][debug] sendMedia media send failed to=%s error=%s", to, primaryError);
                 const errorClass = classifyMediaError(primaryError);
                 if ((videoLike || fileLike) && groupId && (stagedSharedPath || localSourcePath)) {
                     const uploadPath = stagedSharedPath || localSourcePath!;
