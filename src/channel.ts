@@ -2294,6 +2294,11 @@ ${current}
                         conversationLabel = `QQ Guild ${guildId} Channel ${channelId}`;
                     }
                     const fromId = buildEffectiveFromId(baseFromId, activeTempSlot);
+                    const replyToTarget = isGroup
+                        ? `group:${groupId}`
+                        : isGuild
+                            ? `guild:${guildId}:${channelId}`
+                            : `user:${userId}`;
                     const sessionLabel = buildQQSessionLabel({
                         isGroup,
                         isGuild,
@@ -2482,7 +2487,7 @@ ${current}
                     const shouldComputeCommandAuthorized = runtime.channel.commands.shouldComputeCommandAuthorized(text, cfg);
                     const commandAuthorized = shouldComputeCommandAuthorized ? isAdmin : true;
                     const ctxPayload = runtime.channel.reply.finalizeInboundContext({
-                        Provider: "qq", Channel: "qq", From: fromId, To: "qq:bot", Body: bodyWithReply, RawBody: text,
+                        Provider: "qq", Channel: "qq", From: fromId, To: replyToTarget, Body: bodyWithReply, RawBody: text,
                         SenderId: String(userId), SenderName: event.sender?.nickname || "Unknown", ConversationLabel: sessionLabel, ThreadLabel: sessionLabel,
                         SessionKey: route.sessionKey, AccountId: route.accountId, ChatType: isGroup ? "group" : isGuild ? "channel" : "direct", Timestamp: event.time * 1000,
                         Surface: "qq",
